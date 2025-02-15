@@ -6,6 +6,12 @@ import os
 import io
 from docx import Document
 import base64
+import unicodedata
+
+def remove_accents(input_str):
+    """Remove acentos de uma string."""
+    nfkd_form = unicodedata.normalize('NFKD', input_str)
+    return "".join([c for c in nfkd_form if not unicodedata.combining(c)])
 
 def get_base64(file_path):
     """Converte o conteúdo de um arquivo em base64."""
@@ -14,8 +20,8 @@ def get_base64(file_path):
     return base64.b64encode(data).decode()
 
 # Caminhos para os arquivos locais
-icon_path = "images/favicon.ico"       # Imagem do ícone (favicon)
-background_path = "images/background2.jpg"  # Imagem de fundo (pode ser .jpg, .png, etc.)
+icon_path = "images/favicon.ico"         # Imagem do ícone (favicon)
+background_path = "images/background2.jpg" # Imagem de fundo
 
 # Converte as imagens para base64
 icon_base64 = get_base64(icon_path)
@@ -23,7 +29,7 @@ bg_base64 = get_base64(background_path)
 
 # Configura a página (essa função deve ser chamada antes de qualquer outro comando do Streamlit)
 st.set_page_config(
-    page_title="Controle Musical ",
+    page_title="Controle Musical",
     page_icon=f"data:image/x-icon;base64,{icon_base64}"
 )
 
@@ -67,9 +73,43 @@ def save_modifications(modifications):
 if "modifications" not in st.session_state:
     st.session_state["modifications"] = load_modifications()
 
+def get_local_lyrics(artist: str, title: str):
+    """
+    Procura a letra da música em um banco de dados local (arquivo JSON).
+    O arquivo 'local_lyrics.json' deve conter uma lista de registros no formato:
+      [
+         {"artist": "Nome do Artista", "title": "Nome da Música", "lyrics": "Letra..."},
+         ...
+      ]
+    A busca é feita de forma case-insensitive e sem considerar acentos.
+    """
+    local_db_file = "local_lyrics.json"
+    if os.path.exists(local_db_file):
+        with open(local_db_file, "r", encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+                if not isinstance(data, list):
+                    st.warning("O arquivo local_lyrics.json não contém uma lista de registros.")
+                    return None
+                # Normaliza os valores de busca para remover acentos e colocar em minúsculas
+                search_artist = remove_accents(artist.strip().lower())
+                search_title = remove_accents(title.strip().lower())
+                for record in data:
+                    if not isinstance(record, dict):
+                        continue  # ignora registros inválidos
+                    record_artist = remove_accents(record.get("artist", "").strip().lower())
+                    record_title = remove_accents(record.get("title", "").strip().lower())
+                    if record_artist == search_artist and record_title == search_title:
+                        return record.get("lyrics")
+            except json.JSONDecodeError:
+                st.error("Erro ao decodificar o arquivo local_lyrics.json.")
+                return None
+    return None
+
 def get_lyrics(artist: str, title: str):
     """
     Busca a letra da música usando a API Lyrics.ovh.
+    Se não encontrar na API, procura no banco de dados local.
     Retorna a letra se encontrada ou None caso contrário.
     """
     url = f"https://api.lyrics.ovh/v1/{artist}/{title}"
@@ -77,15 +117,21 @@ def get_lyrics(artist: str, title: str):
         response = requests.get(url)
         if response.status_code == 200:
             data = response.json()
-            return data.get("lyrics")
-        else:
-            return None
+            if isinstance(data, dict):
+                lyrics = data.get("lyrics")
+                if lyrics:
+                    return lyrics
     except Exception:
-        return None
+        pass
+    # Se não encontrou na API, procura no banco de dados local (com busca sem acentos)
+    return get_local_lyrics(artist, title)
 
 def singer_page():
     st.title("Buscar Letra")
     st.write("Preencha os campos abaixo para buscar a letra da música.")
+
+    if "last_lyrics" not in st.session_state:
+        st.session_state.last_lyrics = None
 
     # --- Formulário de Busca ---
     with st.form(key="search_form"):
@@ -107,12 +153,12 @@ def singer_page():
         st.write("**Artista:**", st.session_state.last_artist)
         st.write("**Música:**", st.session_state.last_title)
 
-        if st.session_state.last_lyrics is not None:
+        default_lyrics = st.session_state.last_lyrics if st.session_state.last_lyrics is not None else ""
+
+        if default_lyrics:
             st.info("Letra encontrada. Você pode editá-la abaixo:")
-            default_lyrics = st.session_state.last_lyrics
         else:
             st.info("Letra não encontrada. Insira a letra manualmente abaixo:")
-            default_lyrics = ""
 
         # --- Formulário de Edição/Inserção da Letra ---
         with st.form(key="edit_form"):
@@ -153,7 +199,7 @@ def admin_page():
             st.markdown("---")
                     
             # Cria duas colunas para os botões Exportar e Excluir
-            col_export, col_delete, col1, col2, col3, col4, col5, col6, col7 = st.columns([3.2, 3, 1, 1, 1, 1, 1, 1, 1])
+            col_export, col_delete, *_ = st.columns([3.2, 3])
             with col_export:
                 # Cria o documento Word para essa música
                 doc = Document()
