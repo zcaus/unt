@@ -19,6 +19,7 @@ def load_modifications():
                 return []
     else:
         return []
+        
 
 def save_modifications(modifications):
     """Salva a lista de modificações no arquivo JSON."""
